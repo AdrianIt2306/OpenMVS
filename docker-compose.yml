@@ -1,0 +1,15 @@
+services:
+  tk5:
+    build: .
+    ports:
+      - "33270:3270"
+      - "38038:8038"
+      - "3505:3505"  
+      - "5000:5000"
+    volumes:
+      - ./bridge:/app
+      - ./work/jcl:/tk5-/jcl
+      - ./work/prt:/tk5-/prt
+      - ./work/pch:/tk5-/pch
+      - ./work/log:/tk5-/log
+    restart: unless-stopped

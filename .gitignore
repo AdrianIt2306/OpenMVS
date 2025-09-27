@@ -1,0 +1,8 @@
+# Ignore all contents of 'work' and 'tk5-root' folders
+work/
+work/*/
+tk5-root/
+
+# Optionally, allow specific files if needed (uncomment and edit)
+#!work/README.md
+#!tk5-root/README.txt
