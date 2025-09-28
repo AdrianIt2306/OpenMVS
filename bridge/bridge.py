@@ -1,20 +1,30 @@
-import socket
+import socket, time, datetime, os
 
-srv = socket.socket()
-srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-srv.bind(("127.0.0.1", 5000))
-srv.listen(1)
-print("Esperando conexión de Hercules en 127.0.0.1:5000...")
-conn, addr = srv.accept()
-print("Conectado desde:", addr)
+HOST = "127.0.0.1"   # Hercules escucha aquí
+PORT = 5000
+OUTDIR = "spool_out"
+os.makedirs(OUTDIR, exist_ok=True)
 
-with open("salida_1403.txt", "wb") as f:
-    while True:
-        data = conn.recv(4096)
-        if not data:
-            break
-        f.write(data)
+def recv_one_spool():
+    s = socket.socket()
+    s.connect((HOST, PORT))  # Cliente conecta al listener de Hercules
+    fname = datetime.datetime.now().strftime(f"{OUTDIR}/spool_%Y%m%d.txt")
+    with open(fname, "wb") as f:
+        while True:
+            data = s.recv(4096)
+            if not data:  # Hercules cierra al terminar un spool
+                break
+            f.write(data)
+    s.close()
+    print(f"[OK] Spool recibido y guardado en {fname}")
 
-conn.close()
-srv.close()
-print("Listo: salida escrita en salida_1403.txt")
+print(f"Conectando a Hercules en {HOST}:{PORT} ...")
+while True:
+    try:
+        recv_one_spool()
+        time.sleep(0.2)  # espera breve antes del próximo spool
+    except ConnectionRefusedError:
+        time.sleep(0.5)  # no hay spool aún, reintenta
+    except Exception as e:
+        print("[WARN]", e)
+        time.sleep(1)
