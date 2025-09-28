@@ -11,6 +11,11 @@ LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_PATH = os.path.join(LOG_DIR, "console_watch.log")
 
+# PID directory (centralized)
+PIDDIR = os.environ.get("BRIDGE_PIDDIR", "/app/pids")
+os.makedirs(PIDDIR, exist_ok=True)
+PID_FILE = os.path.join(PIDDIR, "console_watch.pid")
+
 logger = logging.getLogger("console_watch")
 if not logger.handlers:
     logger.setLevel(logging.INFO)
@@ -21,6 +26,20 @@ if not logger.handlers:
     fh.setFormatter(fmt)
     logger.addHandler(sh)
     logger.addHandler(fh)
+
+    def write_pid():
+        try:
+            with open(PID_FILE, "w") as f:
+                f.write(str(os.getpid()))
+        except Exception:
+            logger.exception("Failed to write pid file %s", PID_FILE)
+
+    def remove_pid():
+        try:
+            if os.path.exists(PID_FILE):
+                os.remove(PID_FILE)
+        except Exception:
+            logger.exception("Failed to remove pid file %s", PID_FILE)
 
 def iter_lines(sock):
     buf = b""
@@ -36,27 +55,35 @@ def iter_lines(sock):
             line, buf = buf.split(b"\n", 1)
             yield line.decode("ascii", "ignore").rstrip("\r")
 
-logger.info("[watch] conectando a %s:%s ...", HOST, PORT)
-while True:
+def run_watch_loop():
+    logger.info("[watch] conectando a %s:%s ...", HOST, PORT)
+    while True:
+        try:
+            s = socket.socket()
+            s.connect((HOST, PORT))
+            logger.info("conectado a %s:%s", HOST, PORT)
+            for line in iter_lines(s):
+                # DEBUG: ver todo lo que emite la hardcopy
+                logger.info("[CONS] %s", line)
+                if m := re_submit.search(line):
+                    jobname, jobid = m.group(1), m.group(2)
+                    logger.info("SUBMITTED %s -> %s", jobname, jobid)
+                if m := re_ended.search(line):
+                    jobname = m.group(1)
+                    logger.info("ENDED %s", jobname)
+            s.close()
+            logger.info("[watch] EOF (cerró 030E). Reintentando...")
+            time.sleep(0.3)
+        except ConnectionRefusedError:
+            logger.warning("[watch] REFUSED (030E no está escuchando). Reintentando...")
+            time.sleep(0.7)
+        except OSError as e:
+            logger.warning("[watch] WARN: %s. Reintentando...", e)
+            time.sleep(1.0)
+
+if __name__ == '__main__':
+    write_pid()
     try:
-        s = socket.socket()
-        s.connect((HOST, PORT))
-        logger.info("conectado a %s:%s", HOST, PORT)
-        for line in iter_lines(s):
-            # DEBUG: ver todo lo que emite la hardcopy
-            logger.info("[CONS] %s", line)
-            if m := re_submit.search(line):
-                jobname, jobid = m.group(1), m.group(2)
-                logger.info("SUBMITTED %s -> %s", jobname, jobid)
-            if m := re_ended.search(line):
-                jobname = m.group(1)
-                logger.info("ENDED %s", jobname)
-        s.close()
-        logger.info("[watch] EOF (cerró 030E). Reintentando...")
-        time.sleep(0.3)
-    except ConnectionRefusedError:
-        logger.warning("[watch] REFUSED (030E no está escuchando). Reintentando...")
-        time.sleep(0.7)
-    except OSError as e:
-        logger.warning("[watch] WARN: %s. Reintentando...", e)
-        time.sleep(1.0)
+        run_watch_loop()
+    finally:
+        remove_pid()

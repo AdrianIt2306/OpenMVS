@@ -3,8 +3,10 @@ work/
 work/*/
 tk5-root/
 bridge/spool_out/*
+bridge/spool/*
 bridge/logs/*
 *pid
+*ready
 
 
 # Optionally, allow specific files if needed (uncomment and edit)
