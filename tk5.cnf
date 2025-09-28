@@ -66,7 +66,8 @@ INCLUDE conf/source_dasd.cnf
 010C 3505 jcl/dummy eof ascii trunc
 010D 3525 pch/pch10d.txt ascii
 000F 1403 prt/prt00f.txt ${TK5CRLF}
-030E 1403 log/hardcopy.log ${TK5CRLF}
+030E 1403 127.0.0.1:5002 sockdev ${TK5CRLF}
+
 #
 # consoles
 #

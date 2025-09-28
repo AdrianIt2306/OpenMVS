@@ -2,6 +2,10 @@
 work/
 work/*/
 tk5-root/
+bridge/spool_out/*
+bridge/logs/*
+*pid
+
 
 # Optionally, allow specific files if needed (uncomment and edit)
 #!work/README.md
