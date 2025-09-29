@@ -6,6 +6,7 @@ services:
       - "38038:8038"
       - "3505:3505"  
       - "5000:5000"
+      - "8000:8000"
     volumes:
       - ./bridge:/app
       - ./work/jcl:/tk5-/jcl

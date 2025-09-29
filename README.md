@@ -167,3 +167,47 @@ If you want
   additional binary copy of each joblog (EBCDIC raw), or make joblog filenames include
   extracted metadata from the job header.
 - Tell me which of those you prefer and I will implement it.
+
+
+API (FastAPI)
+-------------
+There is a small FastAPI app included under `bridge/api` that exposes the outputs
+produced by `console_bridge.py` and `console_watch.py` so you can query spools,
+joblogs, logs and status over HTTP. The API is launched inside the TK5 container
+after `console_bridge` signals readiness (see `start.sh` behavior).
+
+Quick start (inside the container or in an environment with access to /app):
+
+1. Install deps (if not already present in the image):
+
+```pwsh
+pip install -r /app/bridge/api/requirements.txt
+```
+
+2. Run the API (default port 8000):
+
+```pwsh
+python /app/bridge/api/app.py
+```
+
+3. Example endpoints:
+- GET /health — basic status and whether the bridge ready-file exists
+- GET /spools — list spool files
+- GET /spools/{name} — download a spool file
+- GET /joblogs — list extracted joblogs
+- GET /joblogs/{name} — download an extracted joblog
+- GET /logs/{logname}?lines=200 — tail a log file (console_bridge.log, console_watch.log)
+- GET /pids — list pid files under `/app/pids`
+- GET /ready — check for the bridge ready file
+- GET /raw/search?q=****A — simple search in the first chunk of the raw dump
+- GET /stream/watch — Server-Sent Events stream of new lines appended to `console_watch.log`
+- GET /joblogs/{name}/meta — metadata for a joblog (size, mtime, first lines)
+
+Configuration:
+- The API reads the same environment variables used by the bridge to locate
+  directories: `BRIDGE_OUTDIR`, `BRIDGE_LOGDIR`, `BRIDGE_PIDDIR`, `BRIDGE_READYFILE`.
+- To change port: set `API_PORT` environment variable before launching.
+
+Notes:
+- The API is intentionally small and read-only. It does not modify bridge files.
+- The API is started by `start.sh` after `console_bridge.ready` appears (or after the configured timeout).

@@ -1,4 +1,4 @@
-import socket, time, datetime, os, logging
+import socket, time, datetime, os, logging, re
 from logging.handlers import RotatingFileHandler
 
 HOST = os.environ.get("BRIDGE_HOST", "127.0.0.1")   # Hercules escucha aquí
@@ -8,10 +8,6 @@ LOGDIR = os.environ.get("BRIDGE_LOGDIR", "/app/logs")
 READY_FILE = os.environ.get("BRIDGE_READYFILE", "/app/pids/console_bridge.ready")
 PIDDIR = os.environ.get("BRIDGE_PIDDIR", "/app/pids")
 PID_FILE = os.environ.get("BRIDGE_PIDFILE", os.path.join(PIDDIR, "console_bridge.pid"))
-# Configurable recv size (bytes) for socket; defaults to 64KiB
-RECV_SIZE = int(os.environ.get("BRIDGE_RECV_SIZE", "131072"))
-# When possible, set kernel socket receive buffer to twice the application buffer
-RECV_SOCKBUF = int(os.environ.get("BRIDGE_SO_RCVBUF", str(RECV_SIZE * 2)))
 
 os.makedirs(PIDDIR, exist_ok=True)
 
@@ -48,207 +44,129 @@ def write_ready():
     except Exception:
         logger.exception("Failed to write ready file %s", READY_FILE)
 
-
 class JobLogExtractor:
-    """Extrae bloques de JOB LOG identificados por la línea
-    'J E S 2   J O B   L O G' y los escribe en ficheros separados.
-
-    Funciona en modo streaming: se le pasan trozos de bytes con feed(),
-    y él detecta el inicio (línea con el patrón) y escribe todo lo que
-    venga debajo hasta que aparece otro patrón o se cierra la conexión.
+    """
+    Extrae bloques de JOB LOG usando expresiones regulares para los marcadores
+    de inicio y fin. Extrae el JOBNAME del marcador de inicio y el JOBID del
+    cuerpo del log para nombrar los ficheros de salida.
     """
 
-    # New protocol markers (start/end) as requested
-    START_PATTERN = b"****A  START"
-    END_PATTERN = b"****A   END"
-    START_PATTERN_STR = "****A  START"
-    END_PATTERN_STR = "****A   END"
+    # Expresiones regulares para detectar inicio y fin de un job
+    # Manejan espacios variables (\\s+)
+    START_PATTERN_RE = re.compile(b"\\*\\*\\*\\*A\\s+START\\s+JOB\\s+\\d+\\s+([A-Z0-9#@$]+)")
+    END_PATTERN_RE = re.compile(b"\\*\\*\\*\\*A\\s+END")
+    # Expresión regular para extraer el JOBID de líneas como 'JES2.JOB00001...'
+    JOBID_PATTERN_RE = re.compile(b"JES2\\.(JOB\\d+)")
 
     def __init__(self, outdir=OUTDIR):
         self.buf = bytearray()
         self.recording = False
         self.current_f = None
-        self.counter = 0
         self.outdir = outdir
-        # text-mode buffers for decoded streams (EBCDIC -> UTF-8)
-        self.text_buf = ""
-        self.text_recording = False
-        self.text_current_f = None
+        
+        # Variables para almacenar la información del job actual
+        self.jobname = None
+        self.jobid = None
 
-    def _new_file_path(self):
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.counter += 1
-        return os.path.join(self.outdir, f"joblog_{ts}_{self.counter:03d}.txt")
+    def _reset_state(self):
+        """Resetea el estado para el siguiente job."""
+        if self.current_f:
+            try:
+                self.current_f.close()
+            except IOError as e:
+                logger.error("Error closing joblog file: %s", e)
+        
+        self.recording = False
+        self.current_f = None
+        self.jobname = None
+        self.jobid = None
 
     def feed(self, chunk: bytes):
-        """Feed new bytes; writes to current file(s) when appropriate."""
+        """Alimenta el extractor con nuevos bytes del stream."""
         if not chunk:
             return
         self.buf.extend(chunk)
 
-        # Procesado en bucle para manejar múltiples apariciones en el buffer
         while True:
             if not self.recording:
-                # Buscar START pattern en bytes
-                idx = self.buf.find(self.START_PATTERN)
-                if idx == -1:
-                    # No hay START: descartamos prefijos largos (evitar memoria infinita)
-                    max_keep = len(self.START_PATTERN) + 200
-                    if len(self.buf) > max_keep:
-                        # conservar solo la cola necesaria para detectar un patrón partido
-                        self.buf = self.buf[-max_keep:]
+                match = self.START_PATTERN_RE.search(self.buf)
+                if not match:
+                    # Si no hay inicio, descartamos el buffer para no consumir memoria infinita
+                    # Dejamos una pequeña cola por si el patrón llega cortado
+                    if len(self.buf) > 200:
+                        self.buf = self.buf[-200:]
                     break
-                # Encontrado START: necesitamos identificar fin de la línea del START y comenzar a grabar
-                after = idx + len(self.START_PATTERN)
-                eol_idx = None
-                for nl in (b"\r\n", b"\n", b"\r"):
-                    pos = self.buf.find(nl, after)
-                    if pos != -1:
-                        eol_idx = pos + len(nl)
-                        break
-                if eol_idx is None:
-                    # No hay fin de línea aún: esperar más datos
-                    break
-                # Crear archivo para este JOB LOG
-                path = self._new_file_path()
-                self.current_f = open(path, "wb")
+                
+                # Encontramos un inicio de job
                 self.recording = True
-                # Escribir cualquier contenido que ya esté después de la línea del START
-                if eol_idx < len(self.buf):
-                    self.current_f.write(self.buf[eol_idx:])
-                    # limpiar el buffer completo porque ya todo lo que había quedó escrito
-                    self.buf = bytearray()
-                else:
-                    # No hay contenido después aún
-                    self.buf = bytearray()
+                # Capturamos el Job Name del grupo 1 de la regex
+                self.jobname = match.group(1).decode('ascii', errors='ignore')
+                logger.info("Detected START for jobname: %s", self.jobname)
+
+                # Eliminamos del buffer todo hasta el final del match
+                self.buf = self.buf[match.end():]
+                # Continuamos el bucle para procesar el resto del buffer
                 continue
-            else:
-                # Ya estamos grabando: comprobar si aparece el END_PATTERN en el buffer
-                idx = self.buf.find(self.END_PATTERN)
-                if idx == -1:
-                    # No hay END: todo el buffer pertenece al bloque actual
-                    if self.buf:
+
+            else: # Estamos grabando (self.recording es True)
+                # Primero, buscamos el JOBID si aún no lo tenemos
+                if self.jobname and not self.jobid:
+                    id_match = self.JOBID_PATTERN_RE.search(self.buf)
+                    if id_match:
+                        # JOBID encontrado
+                        self.jobid = id_match.group(1).decode('ascii', errors='ignore')
+                        logger.info("Extracted JOBID: %s for jobname: %s", self.jobid, self.jobname)
+                        
+                        # Ahora que tenemos ambos, creamos el archivo
+                        filename = f"{self.jobid}-{self.jobname}.txt"
+                        path = os.path.join(self.outdir, filename)
+                        
+                        try:
+                            self.current_f = open(path, "wb")
+                            logger.info("Creating spool file: %s", path)
+                            # Escribimos lo que teníamos en el buffer hasta ahora
+                            self.current_f.write(self.buf)
+                            self.buf = bytearray()
+                        except IOError as e:
+                            logger.error("Failed to create joblog file %s: %s", path, e)
+                            self._reset_state() # Resetear si falla la creación del archivo
+                        
+                # Si ya tenemos un archivo abierto, comprobamos si llega el final del job
+                end_match = self.END_PATTERN_RE.search(self.buf)
+                if not end_match:
+                    # Aún no hay fin. Si el archivo ya está abierto, escribimos el buffer.
+                    if self.current_f:
                         self.current_f.write(self.buf)
                         self.buf = bytearray()
-                    break
+                    break # Salimos y esperamos más datos
                 else:
-                    # END encontrado: escribir hasta antes del END, cerrar archivo
-                    if idx > 0:
-                        self.current_f.write(self.buf[:idx])
-                    self.current_f.close()
-                    self.current_f = None
-                    self.recording = False
-                    # dejamos en el buffer el resto desde el END (posible siguiente START)
-                    self.buf = self.buf[idx + len(self.END_PATTERN):]
-                    # continue para detectar inmediatamente el siguiente inicio
+                    # Encontramos el final del job
+                    logger.info("Detected END for job: %s-%s", self.jobid, self.jobname)
+                    # Escribimos los datos hasta justo antes del marcador de fin
+                    if self.current_f:
+                        self.current_f.write(self.buf[:end_match.start()])
+                    
+                    # Guardamos el resto del buffer para la siguiente iteración
+                    self.buf = self.buf[end_match.end():]
+                    
+                    # Reseteamos estado para el próximo job
+                    self._reset_state()
+                    # Volvemos a empezar el bucle por si hay otro job en el buffer
                     continue
 
     def close(self):
-        # Llamar al cierre de conexión: volcar buffer pendiente y cerrar fichero si estaba grabando
+        """Cierra cualquier fichero pendiente al finalizar la conexión."""
+        logger.info("Connection closed. Closing any pending job files.")
         if self.recording and self.current_f:
+            # Si quedaba algo en el buffer, lo escribimos
             if self.buf:
                 self.current_f.write(self.buf)
-            self.current_f.close()
-            self.current_f = None
-            self.recording = False
             self.buf = bytearray()
-        # cerrar cualquier archivo de texto pendiente
-        if self.text_recording and self.text_current_f:
-            if self.text_buf:
-                try:
-                    self.text_current_f.write(self.text_buf)
-                except Exception:
-                    pass
-            try:
-                self.text_current_f.close()
-            except Exception:
-                pass
-            self.text_current_f = None
-            self.text_recording = False
-            self.text_buf = ""
-
-    def feed_text(self, text: str):
-        """Feed decoded textual data (UTF-8 string). This finds the textual PATTERN and
-        writes joblog files as UTF-8 text."""
-        if not text:
-            return
-        self.text_buf += text
-        while True:
-            if not self.text_recording:
-                idx = self.text_buf.find(self.START_PATTERN_STR)
-                if idx == -1:
-                    # keep only tail
-                    max_keep = len(self.START_PATTERN_STR) + 500
-                    if len(self.text_buf) > max_keep:
-                        self.text_buf = self.text_buf[-max_keep:]
-                    break
-                # found pattern: look for end of line
-                after = idx + len(self.START_PATTERN_STR)
-                eol_idx = None
-                for nl in ("\r\n", "\n", "\r"):
-                    pos = self.text_buf.find(nl, after)
-                    if pos != -1:
-                        eol_idx = pos + len(nl)
-                        break
-                if eol_idx is None:
-                    break
-                # create file
-                path = self._new_file_path()
-                try:
-                    self.text_current_f = open(path, "w", encoding="utf-8", errors="replace")
-                except Exception:
-                    self.text_current_f = None
-                self.text_recording = True
-                # write any content after the START line
-                if eol_idx < len(self.text_buf):
-                    if self.text_current_f:
-                        try:
-                            self.text_current_f.write(self.text_buf[eol_idx:])
-                        except Exception:
-                            pass
-                    self.text_buf = ""
-                else:
-                    self.text_buf = ""
-                continue
-            else:
-                # already recording: check for END marker to finish this object
-                idx = self.text_buf.find(self.END_PATTERN_STR)
-                if idx == -1:
-                    # No END yet: write whole buffer to current file
-                    if self.text_buf and self.text_current_f:
-                        try:
-                            self.text_current_f.write(self.text_buf)
-                        except Exception:
-                            pass
-                        self.text_buf = ""
-                    break
-                else:
-                    # END found: write up to it, close file, and keep remainder
-                    if idx > 0 and self.text_current_f:
-                        try:
-                            self.text_current_f.write(self.text_buf[:idx])
-                        except Exception:
-                            pass
-                    if self.text_current_f:
-                        try:
-                            self.text_current_f.close()
-                        except Exception:
-                            pass
-                    self.text_current_f = None
-                    self.text_recording = False
-                    # leave remainder after the END marker for further processing
-                    self.text_buf = self.text_buf[idx + len(self.END_PATTERN_STR):]
-                    # continue loop to detect next START in the remainder
-                    continue
+        self._reset_state()
 
 
 def recv_one_spool():
     s = socket.socket()
-    try:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RECV_SOCKBUF)
-        logger.debug("Set socket SO_RCVBUF=%d", RECV_SOCKBUF)
-    except Exception:
-        logger.debug("Failed to set SO_RCVBUF, continuing with defaults")
     logger.info("Attempting connect to %s:%s", HOST, PORT)
     s.connect((HOST, PORT))  # Cliente conecta al listener de Hercules
     # Archivo con el spool completo (por compatibilidad)
@@ -265,7 +183,7 @@ def recv_one_spool():
             chunk_no = 0
             bytes_written = 0
             while True:
-                data = s.recv(RECV_SIZE)
+                data = s.recv(65536)
                 if not data:  # Hercules cierra al terminar un spool
                     logger.info("recv returned 0 bytes (connection closed)")
                     break
@@ -277,10 +195,6 @@ def recv_one_spool():
                     ready_written = True
                 # Guardar spool completo
                 f.write(data)
-                try:
-                    f.flush()
-                except Exception:
-                    logger.debug("Failed to flush spool file")
                 bytes_written += len(data)
                 # Also append raw bytes to a dedicated debug file
                 try:

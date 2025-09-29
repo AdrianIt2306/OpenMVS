@@ -7,7 +7,7 @@ bridge/spool/*
 bridge/logs/*
 *pid
 *ready
-
+*__pycache__*
 
 # Optionally, allow specific files if needed (uncomment and edit)
 #!work/README.md

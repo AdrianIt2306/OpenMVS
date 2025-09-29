@@ -162,6 +162,16 @@ else
 	fi
 fi
 
+# Start the internal bridge API (FastAPI) inside the same container if present
+if [ -f /app/api/app.py ]; then
+	log "Starting bridge API (uvicorn) inside this container (after console_bridge.ready)..."
+	# Ensure Python can import the /app package path
+	PYTHONPATH=/app "$PY" -m uvicorn api.app:app --host 0.0.0.0 --port ${API_PORT:-8000} --log-level info >> "$LOGDIR/api.log" 2>&1 &
+	API_PID=$!
+	echo $API_PID > "$PIDDIR/bridge_api.pid"
+	log "bridge_api pid=$API_PID"
+fi
+
 log "All helpers started. Waiting for MVS (pid ${MVS_PID}) to exit..."
 wait $MVS_PID
 # Give helpers a short grace period to finish writing logs / close sockets
