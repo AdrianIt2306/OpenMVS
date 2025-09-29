@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TK5 — Web UI</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="logo">OMVS</div>
+      <div class="title">OpenMVS Bridge</div>
+    </div>
+    <div class="controls">
+      <label class="api-url">API base URL:
+        <input id="apiUrl" type="text" value="http://localhost:8000" />
+      </label>
+      <button id="btnRefresh" class="btn primary">Refrescar</button>
+      <label class="autorefresh"><input id="autoRefreshToggle" type="checkbox" checked/> Auto (5s)</label>
+      <div id="lastUpdated" class="last-updated">—</div>
+    </div>
+  </header>
+
+  <main>
+    <div class="left">
+      <section class="pane" id="spoolsPane">
+        <h2>Spools</h2>
+        <div class="filters">
+          <input id="spoolJobName" placeholder="job name (e.g. ECHO)" />
+          <input id="spoolJobId" placeholder="job id (e.g. JOB00002)" />
+          <button id="btnListSpools">Buscar</button>
+        </div>
+        <div id="spoolsList" class="list"></div>
+        <div id="spoolDetail" class="detail"></div>
+      </section>
+    </div>
+
+    <div class="right">
+      <div class="pane">
+        <div class="tabs">
+          <div class="tab-buttons">
+            <button class="tab-button active" data-tab="joblogs">Joblogs</button>
+            <button class="tab-button" data-tab="logs">Logs</button>
+            <button class="tab-button" data-tab="console">Consola</button>
+          </div>
+          <div class="tab-contents">
+            <div id="tab-joblogs" class="tab-content">
+              <h3>Joblogs</h3>
+              <div class="filters">
+                <input id="joblogJobName" placeholder="job name" />
+                <input id="joblogJobId" placeholder="job id" />
+                <button id="btnListJoblogs">Buscar</button>
+              </div>
+              <div id="joblogsList" class="list"></div>
+              <div id="joblogDetail" class="detail"></div>
+            </div>
+
+            <div id="tab-logs" class="tab-content" style="display:none">
+              <h3>Logs & Estado</h3>
+              <div class="log-controls">
+                <button data-log="console_bridge.log" class="btnLog">console_bridge.log</button>
+                <button data-log="console_watch.log" class="btnLog">console_watch.log</button>
+                <button data-log="api.log" class="btnLog">api.log</button>
+              </div>
+              <div class="status">
+                <button id="btnPids">Listar PIDs</button>
+                <button id="btnReady">Ready</button>
+              </div>
+              <pre id="logContent" class="logbox">Seleccione un log</pre>
+              <div class="rawsearch">
+                <input id="rawQuery" placeholder="Buscar en raw dump..." />
+                <button id="btnRawSearch">Buscar</button>
+                <div id="rawResult"></div>
+              </div>
+            </div>
+
+            <div id="tab-console" class="tab-content" style="display:none">
+              <h3>Consola (SSE)</h3>
+              <div id="streamBox" class="stream"></div>
+              <div style="margin-top:8px"><button id="btnStartStream">Conectar SSE</button>
+              <button id="btnStopStream">Desconectar</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <small>Diseñado para usarse con la API del bridge (FastAPI). CORS habilitado en la API.</small>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

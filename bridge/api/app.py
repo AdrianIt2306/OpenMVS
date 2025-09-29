@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Request
 import os
@@ -22,6 +23,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve the web UI (if present) under /ui
+# Robustly discover the repo-level `web/` folder by walking up ancestors
+WEB_DIR = None
+_start = Path(__file__).resolve()
+for ancestor in [ _start ] + list(_start.parents):
+    cand = ancestor / 'web'
+    if cand.exists() and cand.is_dir():
+        WEB_DIR = cand
+        break
+
+if WEB_DIR:
+    app.mount("/ui", StaticFiles(directory=str(WEB_DIR), html=True), name="ui")
+else:
+    import logging
+    logging.getLogger("uvicorn.error").warning("Web UI directory not found in any ancestor; /ui will return 404")
+
+
+@app.get('/')
+async def _root():
+    # Redirect root to the UI if available, otherwise return a small JSON
+    if WEB_DIR.exists():
+        return RedirectResponse(url='/ui/')
+    return {"info": "OpenMVS Bridge API", "ui": False}
 
 
 def ensure_dir(d: Path):

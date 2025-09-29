@@ -23,6 +23,7 @@ COPY bridge/console_watch.py /app/console_watch.py
 COPY bridge/console_bridge.py /app/console_bridge.py
 COPY bridge/start.sh /start.sh
 COPY bridge/api/requirements.txt /tmp/bridge-requirements.txt
+COPY bridge/web/ /app/web/
 RUN if [ -f /tmp/bridge-requirements.txt ]; then \
 			python3 -m venv /opt/venv && \
 			/opt/venv/bin/python -m pip install --upgrade pip setuptools wheel && \
