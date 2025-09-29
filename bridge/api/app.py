@@ -65,23 +65,35 @@ def list_dir_files(d: Path, pattern: str = "*") -> List[Dict[str, Any]]:
         # derive job id/name from the filename stem (without extension)
         job_id = None
         job_name = None
+        job_rc = None
         try:
             stem = p.stem
-            if "-" in stem:
-                left, right = stem.split("-", 1)
-                if re.match(r"^JOB\d+$", left):
-                    job_id = left
-                    job_name = right.split('.')[0].strip()
+            parts = stem.split('-')
+            # Expect filenames like: JOB00001-NAME-RC0000 (third segment is RC)
+            if parts and re.match(r"^JOB\d+$", parts[0]):
+                job_id = parts[0]
+                if len(parts) >= 2:
+                    job_name = parts[1].split('.')[0].strip()
+                if len(parts) >= 3:
+                    third = parts[2]
+                    # normalize RC: if starts with 'RC' strip that prefix
+                    if third.upper().startswith('RC'):
+                        job_rc = third[2:]
+                    else:
+                        job_rc = third
             else:
+                # fallback: if whole stem is JOBxxxx
                 if re.match(r"^JOB\d+$", stem):
                     job_id = stem
         except Exception:
             job_id = None
             job_name = None
+            job_rc = None
 
         out.append({
             "file-name": p.name,
             "job-name": job_name,
+            "job-rc": job_rc,
             "job-id": job_id,
             "path": str(p),
             "size": p.stat().st_size,
@@ -223,30 +235,38 @@ async def joblog_meta(name: str, head_lines: int = 8):
                 first = [next(f).rstrip('\n') for _ in range(head_lines)]
         except Exception:
             first = []
-    # parse filename for job id and job name (e.g. JOB00002-ECHO.txt)
+    # parse filename for job id, job name and job rc (e.g. JOB00002-ECHO-RC0000.txt)
     job_id = None
     job_name = None
+    job_rc = None
     try:
         base = p.stem  # filename without suffix
-        # split on first dash
-        if "-" in base:
-            left, right = base.split("-", 1)
-            # validate left side matches JOB + digits
-            if re.match(r"^JOB\d+$", left):
-                job_id = left
-                job_name = right
+        parts = base.split('-')
+        if parts and re.match(r"^JOB\d+$", parts[0]):
+            job_id = parts[0]
+            if len(parts) >= 2:
+                job_name = parts[1]
+            if len(parts) >= 3:
+                third = parts[2]
+                if third.upper().startswith('RC'):
+                    job_rc = third[2:]
+                else:
+                    job_rc = third
         else:
             if re.match(r"^JOB\d+$", base):
                 job_id = base
     except Exception:
         job_id = None
         job_name = None
+        job_rc = None
+
     # defensive cleanup: remove any accidental extension or trailing dots/whitespace
     if job_id:
         job_id = job_id.split('.')[0].strip()
     if job_name:
-        # job_name may include dots if the original stem had multiple dots; keep left part
         job_name = job_name.split('.')[0].strip()
+    if job_rc:
+        job_rc = job_rc.split('.')[0].strip()
 
     return {
         'name': p.name,
@@ -255,6 +275,7 @@ async def joblog_meta(name: str, head_lines: int = 8):
         'head_lines': first,
         'job_id': job_id,
         'job_name': job_name,
+        'job_rc': job_rc,
     }
 
 

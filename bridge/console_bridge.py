@@ -26,6 +26,38 @@ if not logger.handlers:
     logger.addHandler(sh)
     logger.addHandler(fh)
 
+
+def sanitize_filename_component(s: str) -> str:
+    """Sanitize a string to be safe for use in filenames.
+
+    - Allow only alphanumerics, dot, underscore and hyphen.
+    - Replace any other char with underscore and trim to a reasonable length.
+    """
+    if not s:
+        return ""
+    # Replace undesirable characters with underscore
+    sanitized = re.sub(r'[^A-Za-z0-9._-]', '_', s)
+    # Strip leading/trailing separators
+    sanitized = sanitized.strip(' ._-')
+    # Limit length to avoid overly long filenames
+    return sanitized[:64]
+
+
+def unique_path(path: str) -> str:
+    """Return a path that does not already exist by appending -1, -2, ... if needed.
+
+    Keeps the original extension when adding the suffix.
+    """
+    if not os.path.exists(path):
+        return path
+    base, ext = os.path.splitext(path)
+    i = 1
+    while True:
+        candidate = f"{base}-{i}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+        i += 1
+
 def write_pid():
     try:
         # Ensure pid directory exists (in case start.sh didn't create it)
@@ -57,16 +89,20 @@ class JobLogExtractor:
     END_PATTERN_RE = re.compile(b"\\*\\*\\*\\*A\\s+END")
     # Expresión regular para extraer el JOBID de líneas como 'JES2.JOB00001...'
     JOBID_PATTERN_RE = re.compile(b"JES2\\.(JOB\\d+)")
+    # Expresión regular para extraer RC en formato 'RC= 12AB' (igual y espacio y 4 alfanum)
+    RC_PATTERN_RE = re.compile(b"RC=\\s*([A-Za-z0-9]{4})")
 
     def __init__(self, outdir=OUTDIR):
         self.buf = bytearray()
         self.recording = False
         self.current_f = None
+        self.current_path = None
         self.outdir = outdir
         
         # Variables para almacenar la información del job actual
         self.jobname = None
         self.jobid = None
+        self.rc = None
 
     def _reset_state(self):
         """Resetea el estado para el siguiente job."""
@@ -78,8 +114,10 @@ class JobLogExtractor:
         
         self.recording = False
         self.current_f = None
+        self.current_path = None
         self.jobname = None
         self.jobid = None
+        self.rc = None
 
     def feed(self, chunk: bytes):
         """Alimenta el extractor con nuevos bytes del stream."""
@@ -118,11 +156,29 @@ class JobLogExtractor:
                         logger.info("Extracted JOBID: %s for jobname: %s", self.jobid, self.jobname)
                         
                         # Ahora que tenemos ambos, creamos el archivo
-                        filename = f"{self.jobid}-{self.jobname}.txt"
+                        # Attempt to find RC in the buffer as well (may be present before file creation)
+                        rc_match = self.RC_PATTERN_RE.search(self.buf)
+                        if rc_match:
+                            try:
+                                self.rc = rc_match.group(1).decode('ascii', errors='ignore')
+                                logger.info("Extracted RC: %s for job: %s", self.rc, self.jobid)
+                            except Exception:
+                                self.rc = None
+
+                        # Sanitize jobname component to make a safe filename
+                        safe_jobname = sanitize_filename_component(self.jobname)
+                        # Build filename; if RC available, append '-RCxxxx'
+                        if self.rc:
+                            filename = f"{self.jobid}-{safe_jobname}-RC{self.rc}.txt"
+                        else:
+                            filename = f"{self.jobid}-{safe_jobname}.txt"
                         path = os.path.join(self.outdir, filename)
-                        
+                        # Ensure we don't clobber an existing file
+                        path = unique_path(path)
                         try:
                             self.current_f = open(path, "wb")
+                            # remember current path so we can rename later if RC appears
+                            self.current_path = path
                             logger.info("Creating spool file: %s", path)
                             # Escribimos lo que teníamos en el buffer hasta ahora
                             self.current_f.write(self.buf)
@@ -135,6 +191,36 @@ class JobLogExtractor:
                 end_match = self.END_PATTERN_RE.search(self.buf)
                 if not end_match:
                     # Aún no hay fin. Si el archivo ya está abierto, escribimos el buffer.
+                    # Also look for RC token while recording; if we find it after file creation, rename file
+                    if self.current_f and not self.rc:
+                        rc_match2 = self.RC_PATTERN_RE.search(self.buf)
+                        if rc_match2:
+                            try:
+                                found_rc = rc_match2.group(1).decode('ascii', errors='ignore')
+                                logger.info("Found RC after file creation: %s for job %s", found_rc, self.jobid)
+                                # attempt to rename the file to include RC
+                                if self.current_path:
+                                    safe_jobname = sanitize_filename_component(self.jobname)
+                                    newname = f"{self.jobid}-{safe_jobname}-RC{found_rc}.txt"
+                                    newpath = os.path.join(self.outdir, newname)
+                                    # If target exists, pick a unique path
+                                    newpath = unique_path(newpath)
+                                    try:
+                                        # close current file, rename, reopen in append mode
+                                        try:
+                                            self.current_f.close()
+                                        except Exception:
+                                            pass
+                                        os.rename(self.current_path, newpath)
+                                        self.current_path = newpath
+                                        self.current_f = open(newpath, 'ab')
+                                        self.rc = found_rc
+                                        logger.info("Renamed spool to include RC: %s", newpath)
+                                    except Exception:
+                                        logger.exception("Failed to rename spool file to include RC")
+                            except Exception:
+                                logger.exception("Error extracting RC after file creation")
+                    
                     if self.current_f:
                         self.current_f.write(self.buf)
                         self.buf = bytearray()

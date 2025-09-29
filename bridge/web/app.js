@@ -1,186 +1,137 @@
-// Simple client for the OpenMVS Bridge API
-const qs = (s) => document.querySelector(s);
-const apiUrlInput = qs('#apiUrl');
+// Lightweight client script matching the current HTML structure in index.html
+(function(){
+  const API = window.API_BASE || '';
+  const qs = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
 
-function base() { return apiUrlInput.value.trim().replace(/\/$/, ''); }
+  // Top tabs behavior
+  qsa('.top-tabs .tab').forEach(t=>t.addEventListener('click', ()=>{
+    qsa('.top-tabs .tab').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+  }));
 
-async function fetchJson(path){
-  const res = await fetch(base() + path);
-  if(!res.ok) throw new Error(await res.text());
-  return res.json();
-}
+  // Sidebar selection
+  qsa('.sidebar .item').forEach(it=>it.addEventListener('click', ()=>{
+    qsa('.sidebar .item').forEach(x=>x.classList.remove('selected'));
+    it.classList.add('selected');
+  }));
 
-function formatSize(n){
-  if(n < 1024) return n + ' B';
-  if(n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
-  return (n/(1024*1024)).toFixed(2) + ' MB';
-}
-
-async function listSpools(){
-  const name = qs('#spoolJobName').value.trim();
-  const id = qs('#spoolJobId').value.trim();
-  const params = new URLSearchParams();
-  if(name) params.set('job_name', name);
-  if(id) params.set('job_id', id);
-  const items = await fetchJson('/spools' + (params.toString() ? ('?' + params.toString()) : ''))
-    .catch(e=>{alert('Error: '+e);return []});
-  const list = qs('#spoolsList'); list.innerHTML = '';
-  items.forEach(it=>{
-    const div = document.createElement('div'); div.className='item';
-    const left = document.createElement('div');
-    left.innerHTML = `<strong>${it['job-name']}</strong><div class="meta">${it['job-id']} • ${formatSize(it.size)}</div>`;
-    const right = document.createElement('div');
-    const viewBtn = document.createElement('button'); viewBtn.textContent = 'View'; viewBtn.className='btn'; viewBtn.style.marginLeft='8px';
-    viewBtn.onclick = () => showSpool(it['file-name']);
-    right.appendChild(viewBtn);
-    div.appendChild(left); div.appendChild(right);
-    list.appendChild(div);
+  // +Add
+  const addBtn = qs('.btn.add');
+  if(addBtn) addBtn.addEventListener('click', ()=>{
+    // placeholder - hook into API or open a modal later
+    alert('Action: + Add (placeholder)');
   });
-}
 
-async function showSpool(name){
-  const url = base() + '/spools/' + encodeURIComponent(name);
-  // attempt to fetch as text first
-  try{
-    const res = await fetch(url);
-    if(!res.ok) throw new Error('status '+res.status);
-    const blob = await res.blob();
-    // if it's small, try to decode as text
-    const maxPreview = 200000; // 200 KB
-    const d = qs('#spoolDetail');
-    d.innerHTML = `<h3>${name}</h3><div class="meta">${formatSize(blob.size)}</div>`;
-    if(blob.size > maxPreview){
-      d.innerHTML += `<div class="meta">File too large to preview (${formatSize(blob.size)}). <a href="${url}">Download</a></div>`;
-      return;
+  // Populate data table from /spools
+  async function loadSpools(){
+    const tbody = qs('.data-table tbody');
+    if(!tbody) return;
+    try{
+      const res = await fetch((API?API:'') + '/spools');
+      if(!res.ok) throw new Error('status ' + res.status);
+      const files = await res.json();
+      if(!Array.isArray(files) || files.length===0){
+        tbody.innerHTML = `<tr><td colspan="5" style="color:#777;padding:16px">No spools</td></tr>`;
+        return;
+      }
+  const rows = files.map(f=>{
+        // f can be a string or an object with keys like 'file-name', 'job-id', size
+        let name = '', size = '--', jobname = '', jobid = '';
+        if(typeof f === 'string'){
+          name = f;
+        }else if(f && typeof f === 'object'){
+          name = f['file-name'] || f.fileName || f.name || f['file_name'] || JSON.stringify(f);
+          size = (typeof f.size === 'number') ? niceSize(f.size) : (f.size || '--');
+          jobname = f['job-name'] || f.job_name || f.jobName || '';
+          jobid = f['job-id'] || f.job_id || f.jobId || '';
+          jobrc = f['job-rc'] || f.job_rc || f.jobRc || '';
+        }else{
+          name = String(f);
+        }
+        return `<tr><td>${escapeHtml(jobname)}</td><td>${escapeHtml(jobid)}</td><td>${escapeHtml(jobrc)}</td><td>${escapeHtml(size)}</td><td><button class="btn small view-btn" data-file="${escapeHtml(name)}" data-jobname="${escapeHtml(jobname)}" data-jobid="${escapeHtml(jobid)}">View</button></td></tr>`;
+      }).join('');
+      tbody.innerHTML = rows;
+      // wire view buttons
+      Array.from(tbody.querySelectorAll('.view-btn')).forEach(b=>b.addEventListener('click', ()=>showSpool(b.dataset.file, b.dataset.jobname, b.dataset.jobid)));
+    }catch(err){
+      console.warn('loadSpools error', err);
+      // keep the example row already in the HTML or render fallback
+      // (no-op)
     }
-    const text = await blob.text();
-    // show in a preformatted box
-    d.innerHTML += `<pre class="logbox">${escapeHtml(text)}</pre>`;
-  }catch(err){
-    const d = qs('#spoolDetail');
-    d.innerHTML = `<h3>${name}</h3><div class="meta">Failed to load spool: ${err}</div><div><a href="${base() + '/spools/' + encodeURIComponent(name)}">Download raw</a></div>`;
   }
-}
 
-async function listJoblogs(){
-  const name = qs('#joblogJobName').value.trim();
-  const id = qs('#joblogJobId').value.trim();
-  const params = new URLSearchParams();
-  if(name) params.set('job_name', name);
-  if(id) params.set('job_id', id);
-  const items = await fetchJson('/joblogs' + (params.toString() ? ('?' + params.toString()) : ''))
-    .catch(e=>{alert('Error: '+e);return []});
-  const list = qs('#joblogsList'); list.innerHTML = '';
-  items.forEach(it=>{
-    const div = document.createElement('div'); div.className='item';
-    const left = document.createElement('div');
-    left.innerHTML = `<strong>${it['file-name']}</strong><div class="meta">${it['job-id']||''} ${it['job-name']?('- '+it['job-name']):''} • ${formatSize(it.size)}</div>`;
-    const right = document.createElement('div');
-    const view = document.createElement('button'); view.textContent='Ver'; view.onclick=()=>showJoblog(it['file-name']);
-    right.appendChild(view);
-    div.appendChild(left); div.appendChild(right);
-    list.appendChild(div);
-  });
-}
-
-async function showJoblog(name){
-  const p = base() + '/joblogs/' + encodeURIComponent(name);
-  const meta = await fetchJson('/joblogs/' + encodeURIComponent(name) + '/meta').catch(e=>({error:e}));
-  const content = await fetch(p).then(r=>r.text()).catch(e=>"(error loading)");
-  const d = qs('#joblogDetail');
-  d.innerHTML = `<h3>${name}</h3><div class="meta">${meta.job_id||''} ${meta.job_name?('- '+meta.job_name):''}</div><pre class="logbox">${escapeHtml(content)}</pre>`;
-}
-
-function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-async function loadLog(name, lines=200){
-  const res = await fetchJson('/logs/' + encodeURIComponent(name) + '?lines=' + lines).catch(e=>({content:'(error)'}));
-  qs('#logContent').textContent = res.content || '(no content)';
-}
-
-async function listPids(){
-  const arr = await fetchJson('/pids').catch(e=>[]);
-  alert(JSON.stringify(arr, null, 2));
-}
-
-async function checkReady(){
-  const r = await fetchJson('/ready').catch(e=>({ready:false}));
-  alert(JSON.stringify(r, null, 2));
-}
-
-async function rawSearch(){
-  const q = qs('#rawQuery').value.trim();
-  if(!q) return alert('empty query');
-  const res = await fetchJson('/raw/search?q=' + encodeURIComponent(q)).catch(e=>({error:e}));
-  qs('#rawResult').textContent = JSON.stringify(res);
-}
-
-let evtSource = null;
-function startSSE(){
-  if(evtSource) return;
-  evtSource = new EventSource(base() + '/stream/watch');
-  const box = qs('#streamBox');
-  evtSource.onmessage = (e)=>{
-    const line = e.data || '';
-    const el = document.createElement('div'); el.textContent = line; box.appendChild(el); box.scrollTop = box.scrollHeight;
-  };
-  evtSource.onerror = (err)=>{
-    const el = document.createElement('div'); el.textContent = '(SSE error)'; box.appendChild(el);
-  };
-}
-function stopSSE(){ if(evtSource){ evtSource.close(); evtSource=null; } }
-
-// Auto-refresh support
-let autoRefreshInterval = null;
-function setAutoRefresh(enabled){
-  clearInterval(autoRefreshInterval);
-  if(enabled){
-    autoRefreshInterval = setInterval(()=>{
-      listSpools().catch(()=>{});
-      listJoblogs().catch(()=>{});
-      const el = document.getElementById('lastUpdated');
-      if(el) el.textContent = new Date().toLocaleTimeString();
-    }, 5000);
+  function niceSize(n){
+    if(typeof n !== 'number' || Number.isNaN(n)) return '--';
+    if(n < 1024) return n + ' B';
+    if(n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+    return (n/(1024*1024)).toFixed(2) + ' MB';
   }
-}
 
-// wire up auto-refresh toggle (if present)
-const autoToggle = document.getElementById('autoRefreshToggle');
-if(autoToggle){
-  autoToggle.addEventListener('change', ()=> setAutoRefresh(autoToggle.checked));
-  // start enabled by default when checkbox checked
-  setAutoRefresh(autoToggle.checked);
-}
+  function escapeHtml(s){ return String(s).replace(/[&<>"'`]/g,ch=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'
+  }[ch])); }
 
-// Tab switching
-document.querySelectorAll('.tab-button').forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    document.querySelectorAll('.tab-button').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    const target = btn.dataset.tab;
-    document.querySelectorAll('.tab-content').forEach(tc=>tc.style.display='none');
-    const el = document.getElementById('tab-'+target);
-    if(el) el.style.display='block';
-  });
-});
+  // Minimal SSE starter (call from console or add UI later)
+  let es=null;
+  window.startConsoleStream = function(){
+    if(es) return;
+    try{
+      es = new EventSource((API?API:'') + '/stream/watch');
+      es.onmessage = e=>{
+        const box = qs('.main');
+        const pre = document.createElement('pre'); pre.textContent = e.data; pre.style.background='#071226'; pre.style.color='#bfe7ff'; pre.style.padding='6px'; pre.style.margin='6px 0';
+        box.appendChild(pre);
+        box.scrollTop = box.scrollHeight;
+      };
+      es.onerror = ()=>{ es.close(); es=null; };
+    }catch(e){ console.warn('SSE not available', e); }
+  };
+  window.stopConsoleStream = function(){ if(es){ es.close(); es=null; } };
 
-// wire up buttons
-qs('#btnRefresh').onclick = ()=>{ listSpools(); listJoblogs(); };
-qs('#btnListSpools').onclick = listSpools;
-qs('#btnListJoblogs').onclick = listJoblogs;
-qs('#btnListSpools').addEventListener('click', ()=>qs('#spoolJobName').focus());
-qs('#btnListJoblogs').addEventListener('click', ()=>qs('#joblogJobName').focus());
-document.querySelectorAll('.btnLog').forEach(b=>b.addEventListener('click', ()=>loadLog(b.dataset.log)) );
-qs('#btnPids').onclick = listPids;
-qs('#btnReady').onclick = checkReady;
-qs('#btnRawSearch').onclick = rawSearch;
-qs('#btnStartStream').onclick = startSSE;
-qs('#btnStopStream').onclick = stopSSE;
+  // Auto-refresh table every 10s
+  loadSpools();
+  setInterval(loadSpools, 10000);
+  
+  /* Modal logic */
+  const modal = document.getElementById('modal');
+  const modalTitle = document.getElementById('modal-title');
+  const modalBody = document.getElementById('modal-body');
+  const modalDownload = document.getElementById('modal-download');
+  function openModal(){ modal.setAttribute('aria-hidden','false'); }
+  function closeModal(){ modal.setAttribute('aria-hidden','true'); modalBody.textContent = ''; modalTitle.textContent = ''; modalDownload.href = '#'; }
+  modal.querySelectorAll('[data-close]').forEach(el=>el.addEventListener('click', closeModal));
+  const mclose = modal.querySelector('.modal-close'); if(mclose) mclose.addEventListener('click', closeModal);
 
-// initial load
-listSpools().catch(()=>{});
-listJoblogs().catch(()=>{});
+  async function showSpool(name, jobname, jobid){
+    // Title prefers job-name and job-id when available
+    if(jobname){
+      modalTitle.textContent = jobname + (jobid ? ` (${jobid})` : '');
+    }else{
+      modalTitle.textContent = name;
+    }
+    modalBody.textContent = 'Loading...';
+    modalDownload.href = '#';
+    openModal();
+    try{
+      const url = (API?API:'') + '/spools/' + encodeURIComponent(name);
+      const res = await fetch(url);
+      if(!res.ok) throw new Error('status '+res.status);
+      const blob = await res.blob();
+      const maxPreview = 200000; // 200 KB
+      if(blob.size > maxPreview){
+        modalBody.textContent = `File too large to preview (${blob.size} bytes)`;
+        const objectUrl = URL.createObjectURL(blob);
+        modalDownload.href = objectUrl; modalDownload.download = name;
+        return;
+      }
+      const text = await blob.text();
+      modalBody.textContent = text;
+      const objectUrl = URL.createObjectURL(blob);
+      modalDownload.href = objectUrl; modalDownload.download = name;
+    }catch(err){
+      modalBody.textContent = 'Failed to load: ' + err;
+    }
+  }
 
-// ensure default tab visible
-const defaultTab = document.querySelector('.tab-button.active');
-if(defaultTab){ defaultTab.click(); }
+})();
