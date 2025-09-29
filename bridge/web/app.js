@@ -16,6 +16,14 @@
     it.classList.add('selected');
   }));
 
+  // Attach log items (if any) to open log tail in modal
+  qsa('.sidebar .log-item').forEach(li=>li.addEventListener('click', ()=>{
+    qsa('.sidebar .item').forEach(x=>x.classList.remove('selected'));
+    li.classList.add('selected');
+    const logname = li.dataset.log;
+    if(logname) showLog(logname);
+  }));
+
   // +Add
   const addBtn = qs('.btn.add');
   if(addBtn) addBtn.addEventListener('click', ()=>{
@@ -131,6 +139,27 @@
       modalDownload.href = objectUrl; modalDownload.download = name;
     }catch(err){
       modalBody.textContent = 'Failed to load: ' + err;
+    }
+  }
+
+  // Show tail of a server log in modal by calling /logs/{logname}
+  async function showLog(logname){
+    modalTitle.textContent = logname;
+    modalBody.textContent = 'Loading...';
+    modalDownload.href = '#';
+    openModal();
+    try{
+      const url = (API?API:'') + '/logs/' + encodeURIComponent(logname) + '?lines=400';
+      const res = await fetch(url);
+      if(!res.ok) throw new Error('status '+res.status);
+      const data = await res.json();
+      modalBody.textContent = data.content || '';
+      // create download link with blob
+      const blob = new Blob([data.content || ''], {type:'text/plain;charset=utf-8'});
+      const objectUrl = URL.createObjectURL(blob);
+      modalDownload.href = objectUrl; modalDownload.download = logname;
+    }catch(err){
+      modalBody.textContent = 'Failed to load log: ' + err;
     }
   }
 
